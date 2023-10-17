@@ -429,6 +429,30 @@ options:
     description: |
       Name of RADOS Gateway Zone to create for multi-site replication. This
       option must be specific to the local site e.g. us-west or us-east.
+  ### Cloud sync options
+  cloud-sync-default-s3-target:
+    type: string
+    default: minio
+    description: |
+      The default S3 target to use for cloud sync. This is the name of the
+      s3-integrator Juju application that relates to the ceph-radosgw
+      application configured with cloud-sync.
+  cloud-sync-target-path:
+    type: string
+    default: rgwx-${zonegroup}-${zone}-${sid}/${bucket}
+    description: |
+      A string that defines how the target path is created. The target path
+      specifies a prefix to which the source object name is appended.
+
+      The target path configurable can include any of the following variables:
+        * sid: unique string that represents the sync instance ID
+        * zonegroup: the zonegroup name
+        * zonegroup_id: the zonegroup ID
+        * zone: the zone name
+        * zone_id: the zone id
+        * bucket: source bucket name
+        * owner: source bucket owner ID
+  ###
   namespace-tenants:
     type: boolean
     default: False

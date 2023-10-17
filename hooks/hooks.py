@@ -45,6 +45,7 @@ from charmhelpers.core.hookenv import (
     leader_set,
     leader_get,
     remote_service_name,
+    application_name,
     WORKLOAD_STATES,
 )
 from charmhelpers.core.strutils import bool_from_string
@@ -110,6 +111,10 @@ from charmhelpers.contrib.hardening.harden import harden
 from charmhelpers.contrib.openstack.cert_utils import (
     get_certificate_request,
     process_certificates,
+)
+from ceph_radosgw_context import (
+    CloudSyncContext,
+    S3CredentialsRelationContext,
 )
 
 hooks = Hooks()
@@ -953,6 +958,123 @@ def secondary_relation_changed(relation_id=None, unit=None):
         log('No mutation detected.', 'INFO')
 
 
+@hooks.hook('cloud-sync-relation-changed')
+def cloud_sync_relation_changed(relation_id=None, unit=None):
+    if not is_leader():
+        log('Cannot setup multisite configuration, this unit is not the '
+            'leader')
+        return
+    if not ready_for_service(legacy=False):
+        log('Unit not ready, deferring multisite configuration')
+        return
+
+    primary_data = CloudSyncContext()()
+    if not primary_data:
+        log("Defer processing until primary RGW has provided required data")
+        return
+
+    public_url = '{}:{}'.format(
+        canonical_url(CONFIGS, PUBLIC),
+        listen_port(),
+    )
+    endpoints = [public_url]
+
+    realm = config('realm')
+    zonegroup = config('zonegroup')
+    zone = config('zone')
+
+    if (realm, zonegroup) != (primary_data['realm'],
+                              primary_data['zonegroup']):
+        log("Mismatched configuration so stop multi-site configuration now")
+        return
+
+    mutation = False
+
+    if realm not in multisite.list_realms():
+        log('Realm {} not found, pulling now'.format(realm))
+        multisite.pull_realm(url=primary_data['url'],
+                             access_key=primary_data['access_key'],
+                             secret=primary_data['secret'])
+        multisite.pull_period(url=primary_data['url'],
+                              access_key=primary_data['access_key'],
+                              secret=primary_data['secret'])
+        multisite.set_default_realm(realm)
+        mutation = True
+
+    if zone not in multisite.list_zones():
+        log('cloud-sync zone {} not found, creating now'.format(zone))
+        multisite.pull_period(url=primary_data['url'],
+                              access_key=primary_data['access_key'],
+                              secret=primary_data['secret'])
+        multisite.create_zone(zone,
+                              endpoints=endpoints,
+                              default=False, master=False, readonly=True,
+                              zonegroup=zonegroup,
+                              access_key=primary_data['access_key'],
+                              secret=primary_data['secret'],
+                              tier_type='cloud')
+        mutation = True
+
+    s3_rel_ctxt = S3CredentialsRelationContext()
+    default_profile = config('cloud-sync-default-s3-target')
+    if default_profile not in s3_rel_ctxt:
+        log("Defer cloud-sync relation until default profile {} is set by an "
+            "s3-integrator".format(default_profile))
+        return
+
+    tier_config = multisite.get_cloud_sync_tier_config(
+        s3_rel_context=s3_rel_ctxt,
+        default_profile=default_profile,
+        target_path=config('cloud-sync-target-path'))
+    zone_info = multisite.get_zone_info(zone, zonegroup=zonegroup)
+    if zone_info and 'tier_config' in zone_info:
+        current_tier_config = zone_info.get('tier_config', {})
+        if not multisite.equal_tier_config(actual=current_tier_config,
+                                           expected=tier_config):
+            mutation = True
+
+    if mutation:
+        flatten_tier_config = multisite.flatten_zone_tier_config(tier_config)
+        multisite.modify_zone(
+            zone,
+            zonegroup=zonegroup,
+            tier_config_rm='.')
+        multisite.modify_zone(
+            zone,
+            zonegroup=zonegroup,
+            tier_config=','.join(flatten_tier_config))
+        log(
+            'Mutation detected. Restarting {}.'.format(service_name()),
+            'INFO')
+        multisite.update_period(zonegroup=zonegroup, zone=zone)
+        CONFIGS.write_all()
+        service_restart(service_name())
+        leader_set(restart_nonce=str(uuid.uuid4()))
+    else:
+        log('No mutation detected.', 'INFO')
+
+
+@hooks.hook('s3-credentials-relation-joined')
+def s3_credentials_relation_joined(relation_id=None):
+    if is_leader():
+        # Unless we set the bucket on the app relation data, the s3-integrator
+        # won't set the full s3 connection info on the relation. This is a
+        # NOOP value, since the s3-integrator will set the bucket based on its
+        # config. The bucket value is echoed back on the relation only if the
+        # s3-integrator doesn't have the 'bucket' config set.
+        relation_set(relation_id=relation_id,
+                     app=True,
+                     bucket=application_name())
+
+
+@hooks.hook('s3-credentials-relation-changed')
+def s3_credentials_relation_changed(relation_id=None, unit=None):
+    # we handle the s3 credentials in the cloud-sync relation
+    for r_id in relation_ids('cloud-sync'):
+        for unit in related_units(r_id):
+            cloud_sync_relation_changed(r_id, unit)
+
+
 @hooks.hook('master-relation-departed')
 @hooks.hook('slave-relation-departed')
 def master_slave_relation_departed():
@@ -1007,6 +1129,9 @@ def process_multisite_relations():
     for r_id in relation_ids('secondary'):
         for unit in related_units(r_id):
             secondary_relation_changed(r_id, unit)
+    for r_id in relation_ids('cloud-sync'):
+        for unit in related_units(r_id):
+            cloud_sync_relation_changed(r_id, unit)
 
 
 if __name__ == '__main__':

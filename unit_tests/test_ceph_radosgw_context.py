@@ -26,6 +26,7 @@ TO_PATCH = [
     'relation_get',
     'relation_ids',
     'related_units',
+    'remote_service_name',
     'cmp_pkgrevno',
     'arch',
     'socket',
@@ -522,3 +523,121 @@ class ApacheContextTest(CharmTestCase):
     def setUp(self):
         super(ApacheContextTest, self).setUp(context, TO_PATCH)
         self.config.side_effect = self.test_config.get
+
+
+class SecondaryContextTest(CharmTestCase):
+
+    def setUp(self):
+        super(SecondaryContextTest, self).setUp(context, TO_PATCH)
+        self.relation_get.side_effect = self.test_relation.get
+        self.relation_ids.return_value = ['secondary:6']
+        self.related_units.return_value = ['primary-ceph-radosgw/0']
+
+    def test_complete_ctxt(self):
+        test_ctxt = {
+            'realm': 'realmX',
+            'zonegroup': 'zonegroup1',
+            'access_key': 's3_access_key',
+            'secret': 's3_secret',
+            'url': 'http://10.9.3.3:80',
+        }
+        self.test_relation.set(test_ctxt)
+        ctxt = context.SecondaryContext()
+        self.assertEqual(test_ctxt, ctxt())
+
+    def test_incomplete_ctxt(self):
+        self.test_relation.set({
+            'realm': 'realmX',
+            'zonegroup': 'zonegroup1',
+            'url': 'http://10.9.3.3:80',
+            'access_key': None,
+            'secret': None,
+        })
+        ctxt = context.SecondaryContext()
+        self.assertEqual({}, ctxt())
+
+
+class S3CredentialsRelationContextTest(CharmTestCase):
+
+    def setUp(self):
+        super(S3CredentialsRelationContextTest, self).setUp(context, TO_PATCH)
+
+    def test_get_data(self):
+        self.relation_ids.return_value = [
+            's3-credentials:6',
+            's3-credentials:7',
+            's3-credentials:8',
+            's3-credentials:9',
+        ]
+
+        def _remote_service_name(name):
+            if name == 's3-credentials:6':
+                return 'minio-default'
+            elif name == 's3-credentials:7':
+                return 'minio-dev'
+            elif name == 's3-credentials:8':
+                return 'minio-prod'
+            elif name == 's3-credentials:9':
+                return 'minio-local'
+
+        def _relation_get(rid, app):
+            if app == 'minio-default':
+                return {
+                    'access-key': 'default-access-key',
+                    'secret-key': 'default-secret-key',
+                    'region': 'us-east-1',
+                    'endpoint': 'http://10.13.1.2:9000',
+                    'bucket': 'default',
+                }
+            elif app == 'minio-dev':
+                return {
+                    'access-key': 'dev-access-key',
+                    'secret-key': 'dev-secret-key',
+                    'region': 'us-east-1',
+                    'endpoint': 'http://10.13.1.5:9000',
+                    'bucket': 'staging,test*,dev',
+                }
+            elif app == 'minio-prod':
+                return {
+                    'access-key': 'prod-access-key',
+                    'secret-key': 'prod-secret-key',
+                    'region': 'us-east-2',
+                    'endpoint': 'http://10.13.1.10:9000',
+                    'bucket': 'prod',
+                }
+            elif app == 'minio-local':
+                # This returns incomplete relation app data. It will not be
+                # included in the relation context.
+                return {
+                    'region': 'local',
+                    'endpoint': 'http://192.168.1.100:9000',
+                }
+
+        self.remote_service_name.side_effect = _remote_service_name
+        self.relation_get.side_effect = _relation_get
+        expected = {
+            'minio-default': {
+                'access-key': 'default-access-key',
+                'secret-key': 'default-secret-key',
+                'region': 'us-east-1',
+                'endpoint': 'http://10.13.1.2:9000',
+                'bucket': 'default',
+            },
+            'minio-dev': {
+                'access-key': 'dev-access-key',
+                'secret-key': 'dev-secret-key',
+                'region': 'us-east-1',
+                'endpoint': 'http://10.13.1.5:9000',
+                'bucket': 'staging,test*,dev',
+            },
+            'minio-prod': {
+                'access-key': 'prod-access-key',
+                'secret-key': 'prod-secret-key',
+                'region': 'us-east-2',
+                'endpoint': 'http://10.13.1.10:9000',
+                'bucket': 'prod',
+            }
+        }
+
+        s3_rel_ctxt = context.S3CredentialsRelationContext()
+        self.assertEqual(expected, s3_rel_ctxt)

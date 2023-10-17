@@ -220,7 +220,10 @@ def check_optional_config_and_relations(configs):
 
     # An operator may have deployed both relations
     primary_rids = relation_ids('master') + relation_ids('primary')
-    secondary_rids = relation_ids('slave') + relation_ids('secondary')
+    cloud_sync_rids = relation_ids('cloud-sync')
+    secondary_rids = (relation_ids('slave') +
+                      relation_ids('secondary') +
+                      cloud_sync_rids)
     multisite_rids = primary_rids + secondary_rids
 
     # Any realm or zonegroup config is present, multisite checks can be done.
@@ -282,6 +285,13 @@ def check_optional_config_and_relations(configs):
             if not multisite_ready:
                 return ('waiting',
                         'multi-site master relation incomplete')
+            if cloud_sync_rids:
+                default_profile = config('cloud-sync-default-s3-target')
+                s3_ctxt = ceph_radosgw_context.S3CredentialsRelationContext()
+                if default_profile not in s3_ctxt:
+                    return ('blocked',
+                            "cloud-sync default s3 target creds not found in "
+                            "any s3-credentials relation")
 
     # Check that provided Ceph BlueStoe configuration is valid.
     try:

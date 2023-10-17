@@ -40,6 +40,10 @@ from charmhelpers.core.hookenv import (
     relation_ids,
     unit_public_ip,
     leader_get,
+    remote_service_name,
+)
+from charmhelpers.core.services.helpers import (
+    RelationContext,
 )
 from charmhelpers.contrib.network.ip import (
     format_ipv6_addr,
@@ -342,3 +346,51 @@ class MonContext(context.CephContext):
         if 'fsid' not in ctxt:
             return False
         return context.OSContextGenerator.context_complete(self, ctxt)
+
+
+class SecondaryContext(context.OSContextGenerator):
+    interfaces = ['secondary']
+
+    def __call__(self):
+        ctxt = {}
+        for rid in relation_ids(self.interfaces[0]):
+            self.related = True
+            for unit in related_units(rid):
+                rel_data = relation_get(rid=rid, unit=unit)
+                ctxt = {
+                    'realm': rel_data.get('realm'),
+                    'zonegroup': rel_data.get('zonegroup'),
+                    'access_key': rel_data.get('access_key'),
+                    'secret': rel_data.get('secret'),
+                    'url': rel_data.get('url'),
+                }
+                if self.context_complete(ctxt):
+                    return ctxt
+        return {}
+
+
+class CloudSyncContext(SecondaryContext):
+    interfaces = ['cloud-sync']
+
+
+class S3CredentialsRelationContext(RelationContext):
+    name = 's3-credentials'
+    interface = 's3'
+
+    def __init__(self, *args, **kwargs):
+        self.required_keys = [
+            'access-key', 'secret-key', 'region', 'endpoint', 'bucket',
+        ]
+        RelationContext.__init__(self, *args, **kwargs)
+
+    def get_data(self):
+        if not relation_ids(self.name):
+            return
+
+        for rid in sorted(relation_ids(self.name)):
+            app = remote_service_name(rid)
+            if self.get(app, None):
+                continue
+            reldata = relation_get(rid=rid, app=app)
+            if self._is_ready(reldata):
+                self.setdefault(app, reldata)
