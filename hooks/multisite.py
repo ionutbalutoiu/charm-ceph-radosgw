@@ -299,7 +299,7 @@ def modify_zonegroup(name, endpoints=None, default=False,
 
 
 def create_zone(name, endpoints, default=False, master=False, zonegroup=None,
-                access_key=None, secret=None, readonly=False):
+                access_key=None, secret=None, readonly=False, tier_type=None):
     """
     Create a new RADOS Gateway zone
 
@@ -319,6 +319,8 @@ def create_zone(name, endpoints, default=False, master=False, zonegroup=None,
     :type secret: str
     :param readonly: set zone as read only
     :type: readonly: boolean
+    :param tier_type: tier type to use for the zone
+    :type tier_type: str
     :return: dict of zone configuration
     :rtype: dict
     """
@@ -338,6 +340,8 @@ def create_zone(name, endpoints, default=False, master=False, zonegroup=None,
         cmd.append('--access-key={}'.format(access_key))
         cmd.append('--secret={}'.format(secret))
     cmd.append('--read-only={}'.format(1 if readonly else 0))
+    if tier_type:
+        cmd.append('--tier-type={}'.format(tier_type))
     try:
         return json.loads(_check_output(cmd))
     except TypeError:
@@ -346,7 +350,8 @@ def create_zone(name, endpoints, default=False, master=False, zonegroup=None,
 
 def modify_zone(name, endpoints=None, default=False, master=False,
                 access_key=None, secret=None, readonly=False,
-                realm=None, zonegroup=None):
+                realm=None, zonegroup=None, tier_type=None, tier_config=None,
+                tier_config_rm=None):
     """Modify an existing RADOS Gateway zone
 
     :param name: name of zone to create
@@ -367,6 +372,12 @@ def modify_zone(name, endpoints=None, default=False, master=False,
     :type realm: str
     :param zonegroup: zonegroup to use for zone
     :type zonegroup: str
+    :param tier_type: tier type to use for the zone
+    :type tier_type: str
+    :param tier_config: tier config to use for the zone
+    :type tier_config: str
+    :param tier_config_rm: tier config to remove from the zone
+    :type tier_config_rm: str
     :return: zone configuration
     :rtype: dict
     """
@@ -388,6 +399,12 @@ def modify_zone(name, endpoints=None, default=False, master=False,
         cmd.append('--master')
     if default:
         cmd.append('--default')
+    if tier_type:
+        cmd.append('--tier-type={}'.format(tier_type))
+    if tier_config:
+        cmd.append('--tier-config={}'.format(tier_config))
+    if tier_config_rm:
+        cmd.append('--tier-config-rm={}'.format(tier_config_rm))
     cmd.append('--read-only={}'.format(1 if readonly else 0))
     try:
         return json.loads(_check_output(cmd))
@@ -1289,3 +1306,179 @@ def is_sync_group_flow_update_needed(group, flow_id, source_zone, dest_zone,
         group_id=group["id"], flow_id=flow_id, flow_type=old_flow_type,
         source_zone=source_zone, dest_zone=dest_zone)
     return True
+
+
+def get_cloud_sync_tier_config(s3_rel_context, default_profile, target_path):
+    """Create a tier config for the zone configured with cloud sync.
+
+    This is a helper function used to create a tier config dict with all the
+    values from 's3-credentials' relation (given as 's3_rel_context'), and the
+    charm config values (given as 'default_profile' and 'target_path').
+
+    :param s3_rel_context: relation data with all the remote applications in
+        the 's3-credentials' relation. This value is returned by the
+        'S3CredentialsRelationContext' relation context.
+    :type s3_rel_context: dict
+    :param default_profile: default S3 target to use for cloud sync.
+    :type default_profile: str
+    :param target_path: prefix added to the synced objects on the S3 target.
+    :type target_path: str
+    :return: tier config formed from the relation data and charm configs.
+    :rtype: dict
+    """
+    tier_config = {
+        'connections': [],
+        'profiles': [],
+        'connection_id': default_profile,
+        'target_path': target_path,
+    }
+    for profile in s3_rel_context:
+        s3_info = s3_rel_context[profile]
+        conn = {
+            'id': profile,
+            'region': s3_info['region'],
+            'endpoint': s3_info['endpoint'],
+            'access_key': s3_info['access-key'],
+            'secret': s3_info['secret-key'],
+        }
+        if s3_info.get('s3-uri-style'):
+            conn['host_style'] = s3_info['s3-uri-style']
+        tier_config['connections'].append(conn)
+        if profile == default_profile:
+            # we don't need to add default profile to profiles list
+            continue
+        if not s3_info.get('bucket'):
+            hookenv.log(
+                "S3 credentials for profile {} does not contain bucket "
+                "information".format(profile), level=hookenv.WARNING)
+            continue
+        buckets = s3_info['bucket'].split(',')
+        for bucket in buckets:
+            tier_config['profiles'].append({
+                'connection_id': profile,
+                'source_bucket': bucket,
+                'target_path': target_path,
+            })
+    # remove empty lists from the tier config before returning
+    for k in ['profiles', 'connections']:
+        if len(tier_config[k]) == 0:
+            tier_config.pop(k)
+    return tier_config
+
+
+def equal_tier_config(actual, expected):
+    """Compares two tier configs and returns whether they are equal.
+
+    The expected tier config format is:
+    {
+        "connection_id": "<id>",
+        "target_path": "<target_path>",
+        "connections": [
+            {
+                "id": "<id>",
+                "access_key": <access>,
+                "secret": <secret>,
+                "region": "<region>",
+                "endpoint": "<endpoint>",
+                ...
+            }
+            ...
+        ],
+        profiles: [
+            {
+                "connection_id": "<id>",
+                "source_bucket": "<bucket>",
+                "target_path": "<target_path>",
+                ...
+            }
+            ...
+        ]
+    }
+
+    The tier config can get more complex than this, but the above format is
+    what the charm is currently using. We only care to check if the charm
+    configs updated the previously applied tier config. Order of the items in
+    the nested lists and dicts is not important.
+
+    :param actual: tier config for comparison.
+    :type actual: dict
+    :param expected: expected tier config (usually the value returned by
+        'get_cloud_sync_tier_config' function).
+    :type expected: dict
+    :rtype: Boolean
+    """
+    if type(actual) is list and type(expected) is list:
+        if len(actual) != len(expected):
+            return False
+        for actual_item in actual:
+            found = False
+            for expected_item in expected:
+                if equal_tier_config(actual_item, expected_item):
+                    found = True
+                    break
+            if not found:
+                return False
+        return True
+    elif type(actual) is dict and type(expected) is dict:
+        if len(actual) != len(expected):
+            return False
+        for k in actual:
+            if not equal_tier_config(actual.get(k), expected.get(k)):
+                return False
+        return True
+    return actual == expected
+
+
+def flatten_zone_tier_config(config, root_key_name=''):
+    """Returns a flatten list of zone tier config.
+    This function is used to convert a dict tier config to a flatten list of
+    key=value pairs that can be passed as '--tier-config' parameter to
+    'radosgw-admin zone modify' command.
+    For example, the following dict:
+    {
+        "connection": {
+            "access_key": "<access>",
+            "secret": "<secret>",
+            "endpoint": "<endpoint>"
+        },
+        "acls": [
+            {
+                "type": "<id>",
+                "source_id": "<source>",
+                "dest_id": "<dest>"
+            }
+        ],
+        "target_path": "<target_path>"
+    }
+    is flattened to:
+    [
+        'connection.access_key=<access>',
+        'connection.secret=<secret>',
+        'connection.endpoint=<endpoint>',
+        'acls[0].type=<id>',
+        'acls[0].source_id=<source>',
+        'acls[0].dest_id=<dest>',
+        'target_path=<target_path>'
+    ]
+    :param config: Dict with the zone tier config.
+    :type config: dict
+    :param root_key_name: Root key name for the config (optional).
+    :type root_key_name: str
+    :return: List of key=value pairs for the tier config.
+    :rtype: list
+    """
+    flatten_config = []
+
+    def flatten(elem, key_name=''):
+        if type(elem) is dict:
+            for i in elem:
+                flatten(elem[i], '{}.{}'.format(key_name, i))
+        elif type(elem) is list:
+            for index, item in enumerate(elem):
+                flatten(item, '{}[{}]'.format(key_name, index))
+        else:
+            flatten_config.append('{}={}'.format(key_name[1:], elem))
+
+    flatten(config, root_key_name)
+
+    return flatten_config

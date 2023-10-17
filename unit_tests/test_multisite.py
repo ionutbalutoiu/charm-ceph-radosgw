@@ -41,6 +41,7 @@ def get_zonegroup_stub():
 
 
 class TestMultisiteHelpers(CharmTestCase):
+    maxDiff = None
 
     TO_PATCH = [
         'subprocess',
@@ -170,6 +171,7 @@ class TestMultisiteHelpers(CharmTestCase):
                 zonegroup='brundall',
                 access_key='mykey',
                 secret='mypassword',
+                tier_type='cloud',
             )
             self.assertEqual(result['name'], 'brundall-east')
             self.subprocess.check_output.assert_called_with([
@@ -182,6 +184,7 @@ class TestMultisiteHelpers(CharmTestCase):
                 '--access-key=mykey',
                 '--secret=mypassword',
                 '--read-only=0',
+                '--tier-type=cloud',
             ])
 
     def test_modify_zone(self):
@@ -190,6 +193,8 @@ class TestMultisiteHelpers(CharmTestCase):
             endpoints=['http://localhost:80', 'https://localhost:443'],
             access_key='mykey',
             secret='secret',
+            tier_config='connection.access_key=my-secret-s3-access-key',
+            tier_config_rm='connection.host_style',
             readonly=True
         )
         self.subprocess.check_output.assert_called_with([
@@ -198,6 +203,8 @@ class TestMultisiteHelpers(CharmTestCase):
             '--rgw-zone=brundall-east',
             '--endpoints=http://localhost:80,https://localhost:443',
             '--access-key=mykey', '--secret=secret',
+            '--tier-config=connection.access_key=my-secret-s3-access-key',
+            '--tier-config-rm=connection.host_style',
             '--read-only=1',
         ])
 
@@ -714,3 +721,232 @@ class TestMultisiteHelpers(CharmTestCase):
                 '--source-zones=zone_a,zone_b', '--source-bucket=*',
                 '--dest-zones=zone_c,zone_d', '--dest-bucket=*',
             ])
+
+    def test_get_cloud_sync_tier_config(self):
+        s3_rel_context = {
+            'minio-default': {
+                'access-key': 'default-access-key',
+                'secret-key': 'default-secret-key',
+                'region': 'us-east-1',
+                'endpoint': 'http://10.13.1.2:9000',
+                's3-uri-style': 'path',
+            },
+            'minio-dev': {
+                'access-key': 'dev-access-key',
+                'secret-key': 'dev-secret-key',
+                'region': 'us-east-1',
+                'endpoint': 'http://10.13.1.5:9000',
+                'bucket': 'staging,test*,dev',
+            },
+            'minio-prod': {
+                'access-key': 'prod-access-key',
+                'secret-key': 'prod-secret-key',
+                'region': 'us-east-2',
+                'endpoint': 'http://10.13.1.10:9000',
+                'bucket': 'prod',
+                's3-uri-style': 'virtual',
+            }
+        }
+        default_profile = 'minio-default'
+        target_path = 'rgwx-${zonegroup}-${zone}-${sid}/${bucket}'
+
+        tier_config = multisite.get_cloud_sync_tier_config(
+            s3_rel_context=s3_rel_context,
+            default_profile=default_profile,
+            target_path=target_path)
+
+        expected = {
+            'connection_id': default_profile,
+            'target_path': target_path,
+            'connections': [
+                {
+                    'id': 'minio-default',
+                    'region': 'us-east-1',
+                    'endpoint': 'http://10.13.1.2:9000',
+                    'access_key': 'default-access-key',
+                    'secret': 'default-secret-key',
+                    'host_style': 'path',
+                },
+                {
+                    'id': 'minio-dev',
+                    'region': 'us-east-1',
+                    'endpoint': 'http://10.13.1.5:9000',
+                    'access_key': 'dev-access-key',
+                    'secret': 'dev-secret-key',
+                },
+                {
+                    'id': 'minio-prod',
+                    'region': 'us-east-2',
+                    'endpoint': 'http://10.13.1.10:9000',
+                    'access_key': 'prod-access-key',
+                    'secret': 'prod-secret-key',
+                    'host_style': 'virtual',
+                },
+            ],
+            'profiles': [
+                {
+                    'connection_id': 'minio-dev',
+                    'source_bucket': 'staging',
+                    'target_path': target_path,
+                },
+                {
+                    'connection_id': 'minio-dev',
+                    'source_bucket': 'test*',
+                    'target_path': target_path,
+                },
+                {
+                    'connection_id': 'minio-dev',
+                    'source_bucket': 'dev',
+                    'target_path': target_path,
+                },
+                {
+                    'connection_id': 'minio-prod',
+                    'source_bucket': 'prod',
+                    'target_path': target_path,
+                },
+            ],
+        }
+        self.assertEqual(tier_config, expected)
+
+    def test_equal_tier_config(self):
+        actual = {
+            "connection_id": "<id>",
+            "target_path": "<target_path>",
+            "connections": [
+                {
+                    "id": "<id2>",
+                    "endpoint": "<endpoint2>",
+                },
+                {
+                    "id": "<id1>",
+                    "endpoint": "<endpoint1>",
+                },
+            ],
+            "profiles": [
+                {
+                    "connection_id": "<id>",
+                    "source_bucket": "<bucket>",
+                    "target_path": "<target_path>",
+                }
+            ],
+        }
+        expected = {
+            "connection_id": "<id>",
+            "profiles": [
+                {
+                    "connection_id": "<id>",
+                    "source_bucket": "<bucket>",
+                    "target_path": "<target_path>",
+                }
+            ],
+            "connections": [
+                {
+                    "id": "<id1>",
+                    "endpoint": "<endpoint1>",
+                },
+                {
+                    "id": "<id2>",
+                    "endpoint": "<endpoint2>",
+                },
+            ],
+            "target_path": "<target_path>",
+        }
+        is_equal = multisite.equal_tier_config(actual, expected)
+        self.assertTrue(is_equal)
+
+    def test_non_equal_tier_config(self):
+        actual = {
+            "connection_id": "<id>",
+            "target_path": "<target_path>",
+            "connections": [
+                {
+                    "id": "<id>",
+                    "endpoint": "<endpoint>",
+                },
+            ],
+        }
+        expected = {
+            "connection_id": "<id>",
+            "profiles": [
+                {
+                    "connection_id": "<id>",
+                    "source_bucket": "<bucket>",
+                    "target_path": "<target_path>",
+                }
+            ],
+            "connections": [
+                {
+                    "id": "<id>",
+                    "endpoint": "<endpoint>",
+                },
+            ],
+            "target_path": "<target_path>",
+        }
+        is_equal = multisite.equal_tier_config(actual, expected)
+        self.assertFalse(is_equal)
+
+    def test_flatten_zone_tier_config(self):
+        tier_config = {
+            'connection': {
+                'access_key': 's3_access_key',
+                'secret': 's3_secret',
+                'endpoint': 's3_endpoint',
+            },
+            'acls': [
+                {
+                    'type': 'acl1',
+                    'source_id': 'source1',
+                    'dest_id': 'dest1',
+                },
+                {
+                    'type': 'acl2',
+                    'source_id': 'source2',
+                    'dest_id': 'dest2',
+                },
+            ],
+            'connections': [
+                {
+                    'id': 'conn1',
+                    'access_key': 'conn1_s3_access_key',
+                    'secret': 'conn1_s3_secret',
+                    'endpoint': 'conn1_s3_endpoint',
+                },
+            ],
+            'profiles': [
+                {
+                    'source_bucket': 'bucket1',
+                    'connection_id': 'conn1',
+                    'acls_id': 'acl1',
+                },
+                {
+                    'source_bucket': 'bucket2',
+                    'connection_id': 'conn1',
+                    'acls_id': 'acl2',
+                },
+            ],
+            'target_path': 'rgwx-${zonegroup}-${zone}-${sid}/${bucket}'
+        }
+        flatten_config = multisite.flatten_zone_tier_config(tier_config)
+        expected = [
+            'connection.access_key=s3_access_key',
+            'connection.secret=s3_secret',
+            'connection.endpoint=s3_endpoint',
+            'acls[0].type=acl1',
+            'acls[0].source_id=source1',
+            'acls[0].dest_id=dest1',
+            'acls[1].type=acl2',
+            'acls[1].source_id=source2',
+            'acls[1].dest_id=dest2',
+            'connections[0].id=conn1',
+            'connections[0].access_key=conn1_s3_access_key',
+            'connections[0].secret=conn1_s3_secret',
+            'connections[0].endpoint=conn1_s3_endpoint',
+            'profiles[0].source_bucket=bucket1',
+            'profiles[0].connection_id=conn1',
+            'profiles[0].acls_id=acl1',
+            'profiles[1].source_bucket=bucket2',
+            'profiles[1].connection_id=conn1',
+            'profiles[1].acls_id=acl2',
+            'target_path=rgwx-${zonegroup}-${zone}-${sid}/${bucket}',
+        ]
+        self.assertEqual(flatten_config, expected)

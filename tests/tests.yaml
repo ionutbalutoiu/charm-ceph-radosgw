@@ -12,6 +12,7 @@ smoke_bundles:
 dev_bundles:
   - jammy-antelope-multisite
   - jammy-bobcat-multisite
+  - jammy-bobcat-multisite-cloud-sync
   - jammy-caracal-multisite
   - vault: jammy-antelope
   - vault: jammy-bobcat
@@ -21,6 +22,9 @@ dev_bundles:
   - vault: jammy-caracal-namespaced
 
 target_deploy_status:
+  cloud-sync-ceph-radosgw:
+    workload-status: blocked
+    workload-status-message-prefix: multi-site configuration but primary/secondary relation missing
   vault:
     workload-status: blocked
     workload-status-message-prefix: Vault needs to be initialized
