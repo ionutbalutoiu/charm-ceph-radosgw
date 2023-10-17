@@ -1,0 +1,137 @@
+options:
+  source: &source cloud:jammy-bobcat
+
+series: jammy
+
+comment:
+- 'machines section to decide order of deployment. database sooner = faster'
+machines:
+  '0':
+  '1':
+  '2':
+  '3':
+  '4':
+  '5':
+  '6':
+  '7':
+  '8':
+  '9':
+  '10':
+  '11':
+  '12':
+
+applications:
+  ceph-radosgw:
+    charm: ../../ceph-radosgw.charm
+    num_units: 1
+    options:
+      source: *source
+    to:
+      - '0'
+
+  secondary-ceph-radosgw:
+    charm: ../../ceph-radosgw.charm
+    num_units: 1
+    options:
+      source: *source
+    to:
+      - '1'
+
+  cloud-sync-ceph-radosgw:
+    charm: ../../ceph-radosgw.charm
+    num_units: 1
+    options:
+      source: *source
+      realm: zaza_realm
+      zonegroup: zaza_zg
+      zone: zaza_cloud_sync
+      cloud-sync-default-s3-target: s3-default
+      cloud-sync-target-path: ${bucket}
+    to:
+      - '2'
+
+  ceph-osd:
+    charm: ch:ceph-osd
+    num_units: 3
+    storage:
+      osd-devices: 'cinder,10G'
+    options:
+      source: *source
+      osd-devices: '/srv/ceph /dev/test-non-existent'
+    to:
+      - '3'
+      - '4'
+      - '5'
+    channel: latest/edge
+
+  secondary-ceph-osd:
+    charm: ch:ceph-osd
+    num_units: 3
+    storage:
+      osd-devices: 'cinder,10G'
+    options:
+      source: *source
+      osd-devices: '/srv/ceph /dev/test-non-existent'
+    to:
+      - '6'
+      - '7'
+      - '8'
+    channel: latest/edge
+
+  ceph-mon:
+    charm: ch:ceph-mon
+    num_units: 1
+    options:
+      monitor-count: 1
+      source: *source
+    to:
+      - '9'
+    channel: latest/edge
+
+  secondary-ceph-mon:
+    charm: ch:ceph-mon
+    num_units: 1
+    options:
+      monitor-count: 1
+      source: *source
+    to:
+      - '10'
+    channel: latest/edge
+
+  s3-default:
+    charm: ch:minio-test
+    num_units: 1
+    to:
+      - '11'
+    channel: latest/edge
+
+  s3-dev:
+    charm: ch:minio-test
+    num_units: 1
+    options:
+      bucket: dev*
+    to:
+      - '12'
+    channel: latest/edge
+
+relations:
+  - - 'ceph-osd:mon'
+    - 'ceph-mon:osd'
+
+  - - 'ceph-radosgw:mon'
+    - 'ceph-mon:radosgw'
+
+  - - 'secondary-ceph-osd:mon'
+    - 'secondary-ceph-mon:osd'
+
+  - - 'secondary-ceph-radosgw:mon'
+    - 'secondary-ceph-mon:radosgw'
+
+  - - 'cloud-sync-ceph-radosgw:mon'
+    - 'ceph-mon:radosgw'
+
+  - - 'cloud-sync-ceph-radosgw:s3-credentials'
+    - 's3-default:s3-credentials'
+
+  - - 'cloud-sync-ceph-radosgw:s3-credentials'
+    - 's3-dev:s3-credentials'

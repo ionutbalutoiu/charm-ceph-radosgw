@@ -681,13 +681,16 @@ class CephRadosGWTests(CharmTestCase):
 class MiscMultisiteTests(CharmTestCase):
 
     TO_PATCH = [
+        'application_name',
         'restart_nonce_changed',
         'relation_ids',
         'related_units',
+        'relation_set',
         'leader_get',
         'is_leader',
         'primary_relation_joined',
         'secondary_relation_changed',
+        'cloud_sync_relation_changed',
         'service_restart',
         'service_name',
         'multisite'
@@ -696,11 +699,13 @@ class MiscMultisiteTests(CharmTestCase):
     _relation_ids = {
         'primary': ['primary:1'],
         'secondary': ['secondary:1'],
+        'cloud-sync': ['cloud-sync:1'],
     }
 
     _related_units = {
         'primary:1': ['rgw/0', 'rgw/1'],
         'secondary:1': ['rgw-s/0', 'rgw-s/1'],
+        'cloud-sync:1': ['rgw-c-s/0', 'rgw-c-s/1'],
     }
 
     def setUp(self):
@@ -724,9 +729,36 @@ class MiscMultisiteTests(CharmTestCase):
     def test_process_multisite_relations(self):
         ceph_hooks.process_multisite_relations()
         self.primary_relation_joined.assert_called_once_with('primary:1')
+        self.assertEqual(self.secondary_relation_changed.call_count, 2)
         self.secondary_relation_changed.assert_has_calls([
             call('secondary:1', 'rgw-s/0'),
             call('secondary:1', 'rgw-s/1'),
+        ])
+        self.assertEqual(self.cloud_sync_relation_changed.call_count, 2)
+        self.cloud_sync_relation_changed.assert_has_calls([
+            call('cloud-sync:1', 'rgw-c-s/0'),
+            call('cloud-sync:1', 'rgw-c-s/1'),
+        ])
+
+    def test_s3_credentials_relation_joined(self):
+        self.is_leader.return_value = True
+        self.application_name.return_value = 'ceph-radosgw'
+
+        ceph_hooks.s3_credentials_relation_joined('s3-credentials:1')
+
+        self.is_leader.assert_called_once_with()
+        self.application_name.assert_called_once_with()
+        self.relation_set.assert_called_once_with(
+            relation_id='s3-credentials:1',
+            app=True,
+            bucket='ceph-radosgw')
+
+    def test_s3_credentials_relation_changed(self):
+        ceph_hooks.s3_credentials_relation_changed('s3-credentials:1')
+        self.assertEqual(self.cloud_sync_relation_changed.call_count, 2)
+        self.cloud_sync_relation_changed.assert_has_calls([
+            call('cloud-sync:1', 'rgw-c-s/0'),
+            call('cloud-sync:1', 'rgw-c-s/1'),
         ])
 
 
@@ -1004,6 +1036,160 @@ class SecondaryMultisiteTests(CephRadosMultisiteTests):
         self.is_leader.return_value = False
         ceph_hooks.secondary_relation_changed('secondary:1', 'rgw/0')
         self.relation_get.assert_not_called()
+
+    @patch.object(ceph_hooks, "S3CredentialsRelationContext")
+    @patch.object(ceph_hooks, "CloudSyncContext")
+    def test_cloud_sync_relation_changed(self, cloud_sync_ctxt, s3_rel_ctxt):
+        for k, v in self._complete_config.items():
+            self.test_config.set(k, v)
+        self.test_config.set('cloud-sync-default-s3-target', 'default')
+        self.test_config.set('cloud-sync-target-path', 'test_target_path')
+        self.is_leader.return_value = True
+        ctxt_mock = MagicMock()
+        ctxt_mock.side_effect = lambda: self._test_relation
+        cloud_sync_ctxt.side_effect = lambda: ctxt_mock
+        self.canonical_url.return_value = 'http://rgw'
+        self.listen_port.return_value = 80
+        self.multisite.list_realms.return_value = []
+        self.multisite.list_zones.return_value = []
+        test_s3_rel_ctxt = {
+            'default': {
+                'access-key': 'default-access-key',
+                'secret-key': 'default-secret-key',
+                'region': 'us-east-1',
+                'endpoint': 'http://10.13.1.2:9000',
+                'bucket': 'default',
+            }
+        }
+        s3_rel_ctxt.return_value = test_s3_rel_ctxt
+        self.multisite.get_cloud_sync_tier_config.return_value = {
+            'connection_id': 'default',
+            'target_path': 'test_target_path',
+        }
+        self.multisite.get_zonegroup_info.return_value = get_zonegroup_stub()
+        self.multisite.get_zone_info.return_value = {
+            'id': 'test_zone_id_one',
+            'tier_config': {
+                'connection_id': 'default',
+                'target_path': 'test_target_path',
+            },
+        }
+        self.multisite.flatten_zone_tier_config.return_value = [
+            'connection_id=default',
+            'target_path=test_target_path',
+        ]
+
+        ceph_hooks.cloud_sync_relation_changed('cloud-sync:1', 'rgw/0')
+
+        cloud_sync_ctxt.assert_called_once_with()
+        ctxt_mock.assert_called_once_with()
+        self.canonical_url.assert_called_once_with(ANY, 'public')
+        self.listen_port.assert_called_once_with()
+        self.assertEqual(self.config.call_count, 5)
+        self.config.assert_has_calls([
+            call('realm'),
+            call('zonegroup'),
+            call('zone'),
+            call('cloud-sync-default-s3-target'),
+            call('cloud-sync-target-path'),
+        ])
+        self.multisite.pull_realm.assert_called_once_with(
+            url=self._test_relation['url'],
+            access_key=self._test_relation['access_key'],
+            secret=self._test_relation['secret'])
+        self.assertEqual(self.multisite.pull_period.call_count, 2)
+        self.multisite.pull_period.assert_has_calls([
+            call(url=self._test_relation['url'],
+                 access_key=self._test_relation['access_key'],
+                 secret=self._test_relation['secret']),
+            call(
+                url=self._test_relation['url'],
+                access_key=self._test_relation['access_key'],
+                secret=self._test_relation['secret'],
+            ),
+        ])
+        self.multisite.set_default_realm.assert_called_once_with(
+            self._complete_config['realm'])
+        self.multisite.create_zone.assert_called_once_with(
+            self._complete_config['zone'],
+            endpoints=['http://rgw:80'],
+            default=False, master=False, readonly=True,
+            zonegroup=self._complete_config['zonegroup'],
+            access_key=self._test_relation['access_key'],
+            secret=self._test_relation['secret'],
+            tier_type='cloud',
+        )
+        self.multisite.get_cloud_sync_tier_config.assert_called_once_with(
+            s3_rel_context=test_s3_rel_ctxt,
+            default_profile='default',
+            target_path='test_target_path')
+        self.multisite.get_zone_info.assert_called_once_with(
+            self._complete_config['zone'],
+            zonegroup=self._complete_config['zonegroup'])
+        self.multisite.flatten_zone_tier_config.assert_called_once_with(
+            {'connection_id': 'default',
+             'target_path': 'test_target_path'})
+        self.assertEqual(self.multisite.modify_zone.call_count, 2)
+        self.multisite.modify_zone.assert_has_calls([
+            call(self._complete_config['zone'],
+                 zonegroup=self._complete_config['zonegroup'],
+                 tier_config_rm='.'),
+            call(self._complete_config['zone'],
+                 zonegroup=self._complete_config['zonegroup'],
+                 endpoints=['http://rgw:80'],
+                 default=False, master=False, readonly=True,
+                 access_key=self._test_relation['access_key'],
+                 secret=self._test_relation['secret'],
+                 tier_type='cloud',
+                 tier_config=('connection_id=default,'
+                              'target_path=test_target_path')),
+        ])
+        self.multisite.update_period.assert_called_once_with(
+            zonegroup=self._complete_config['zonegroup'],
+            zone=self._complete_config['zone'])
+        self.service_restart.assert_called_once_with('rgw@hostname')
+        self.leader_set.assert_called_once_with(restart_nonce=ANY)
+
+    @patch.object(ceph_hooks, "CloudSyncContext")
+    def test_cloud_sync_relation_changed_incomplete_relation(self,
+                                                             cloud_sync_ctxt):
+        self.is_leader.return_value = True
+        ctxt_mock = MagicMock()
+        ctxt_mock.side_effect = lambda: {}
+        cloud_sync_ctxt.side_effect = lambda: ctxt_mock
+
+        ceph_hooks.cloud_sync_relation_changed('cloud-sync:1', 'rgw/0')
+
+        cloud_sync_ctxt.assert_called_once_with()
+        ctxt_mock.assert_called_once_with()
+        self.config.assert_not_called()
+
+    @patch.object(ceph_hooks, "CloudSyncContext")
+    def test_cloud_sync_relation_changed_mismatching_config(self,
+                                                            cloud_sync_ctxt):
+        for k, v in self._complete_config.items():
+            self.test_config.set(k, v)
+        self.is_leader.return_value = True
+        ctxt_mock = MagicMock()
+        ctxt_mock.side_effect = lambda: self._test_bad_relation
+        cloud_sync_ctxt.side_effect = lambda: ctxt_mock
+
+        ceph_hooks.cloud_sync_relation_changed('cloud-sync:1', 'rgw/0')
+
+        cloud_sync_ctxt.assert_called_once_with()
+        ctxt_mock.assert_called_once_with()
+        self.assertEqual(self.config.call_count, 3)
+        self.config.assert_has_calls([
+            call('realm'),
+            call('zonegroup'),
+            call('zone'),
+        ])
+        self.multisite.list_realms.assert_not_called()
+
+    def test_cloud_sync_relation_changed_not_leader(self):
+        self.is_leader.return_value = False
+        ceph_hooks.cloud_sync_relation_changed('cloud-sync:1', 'rgw/0')
+        self.ready_for_service.assert_not_called()
 
     @patch.object(ceph_hooks, 'apt_install')
     @patch.object(ceph_hooks, 'services')
