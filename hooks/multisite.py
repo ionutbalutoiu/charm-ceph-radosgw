@@ -24,6 +24,31 @@ import charmhelpers.core.decorators as decorators
 
 RGW_ADMIN = 'radosgw-admin'
 
+SYNC_POLICY_ENABLED = 'enabled'
+SYNC_POLICY_ALLOWED = 'allowed'
+SYNC_POLICY_FORBIDDEN = 'forbidden'
+SYNC_POLICY_STATES = [
+    SYNC_POLICY_ENABLED,
+    SYNC_POLICY_ALLOWED,
+    SYNC_POLICY_FORBIDDEN
+]
+SYNC_FLOW_DIRECTIONAL = 'directional'
+SYNC_FLOW_SYMMETRICAL = 'symmetrical'
+SYNC_FLOW_TYPES = [
+    SYNC_FLOW_DIRECTIONAL,
+    SYNC_FLOW_SYMMETRICAL,
+]
+
+
+class UnknownSyncPolicyState(Exception):
+    """Raised when an unknown sync policy state is encountered"""
+    pass
+
+
+class UnknownSyncFlowType(Exception):
+    """Raised when an unknown sync flow type is encountered"""
+    pass
+
 
 @decorators.retry_on_exception(num_retries=10, base_delay=5,
                                exc_type=subprocess.CalledProcessError)
@@ -888,3 +913,245 @@ def check_cluster_has_buckets():
         if check_zonegroup_has_buckets(zonegroup):
             return True
     return False
+
+
+def list_sync_groups(bucket=None):
+    """List sync policy groups.
+
+    :param bucket: Bucket name. If this this given, the bucket level group
+        policies are listed.
+    :type bucket: str
+
+    :return: List of sync policy groups.
+    :rtype: list
+    """
+    cmd = [
+        RGW_ADMIN, '--id={}'.format(_key_name()),
+        'sync', 'group', 'get',
+    ]
+    if bucket:
+        cmd.append('--bucket={}'.format(bucket))
+    try:
+        return json.loads(_check_output(cmd))
+    except TypeError:
+        return []
+
+
+def sync_group_exists(group_id, bucket=None):
+    """Check if the sync policy group exists.
+
+    :param group_id: Sync policy group id.
+    :type group_id: str
+    :param bucket: Bucket name. If this this given, the bucket level group
+        policy is checked.
+    :type bucket: str
+
+    :rtype: Boolean
+    """
+    for group in list_sync_groups(bucket=bucket):
+        if group['key'] == group_id:
+            return True
+    return False
+
+
+def get_sync_group(group_id, bucket=None):
+    """Get the sync policy group configuration.
+
+    :param group_id: Sync policy group id.
+    :type group_id: str
+    :param bucket: Bucket name. If this this given, the bucket level group
+        policy is returned.
+    :type bucket: str
+
+    :return: Sync policy group configuration.
+    :rtype: dict
+    """
+    cmd = [
+        RGW_ADMIN, '--id={}'.format(_key_name()),
+        'sync', 'group', 'get',
+        '--group-id={}'.format(group_id),
+    ]
+    if bucket:
+        cmd.append('--bucket={}'.format(bucket))
+    try:
+        return json.loads(_check_output(cmd))
+    except TypeError:
+        return None
+
+
+def create_sync_group(group_id, status, bucket=None):
+    """Create a sync policy group.
+
+    :param group_id: ID of the sync policy group to be created.
+    :type group_id: str
+    :param status: Status of the sync policy group to be created. Must be one
+        of the following: 'enabled', 'allowed', 'forbidden'.
+    :type status: str
+    :param bucket: Bucket name. If this this given, the bucket level group
+        policy is created.
+    :type bucket: str
+
+    :raises UnknownSyncPolicyState: if the provided status is not one of the
+        allowed values.
+
+    :return: Sync policy group configuration.
+    :rtype: dict
+    """
+    if status not in SYNC_POLICY_STATES:
+        raise UnknownSyncPolicyState(
+            'Unknown sync policy state: {}'.format(status))
+    cmd = [
+        RGW_ADMIN, '--id={}'.format(_key_name()),
+        'sync', 'group', 'create',
+        '--group-id={}'.format(group_id),
+        '--status={}'.format(status),
+    ]
+    if bucket:
+        cmd.append('--bucket={}'.format(bucket))
+    try:
+        return json.loads(_check_output(cmd))
+    except TypeError:
+        return None
+
+
+def remove_sync_group(group_id, bucket=None):
+    """Remove a sync group with the given group ID and optional bucket.
+
+    :param group_id: The ID of the sync group to remove.
+    :type group_id: str
+    :param bucket: Bucket name. If this this given, the bucket level group
+        policy is removed.
+    :type bucket: str
+
+    :return: The output of the command as a dict.
+    :rtype: dict
+    """
+    cmd = [
+        RGW_ADMIN, '--id={}'.format(_key_name()),
+        'sync', 'group', 'remove',
+        '--group-id={}'.format(group_id),
+    ]
+    if bucket:
+        cmd.append('--bucket={}'.format(bucket))
+    try:
+        return json.loads(_check_output(cmd))
+    except TypeError:
+        return None
+
+
+def create_sync_group_flow(group_id, flow_id, flow_type, source_zone,
+                           dest_zone):
+    """Create a new sync group data flow with the given parameters.
+
+    :param group_id: The ID of the sync group to create the data flow for.
+    :type group_id: str
+    :param flow_id: The ID of the new data flow.
+    :type flow_id: str
+    :param flow_type: The type of the new data flow.
+    :type flow_type: str
+    :param source_zone: The source zone for the new data flow.
+    :type source_zone: str
+    :param dest_zone: The destination zone for the new data flow.
+    :type dest_zone: str
+
+    :raises UnknownSyncFlowType: If an unknown sync flow type is provided.
+
+    :return: Sync group data flow configuration.
+    :rtype: dict
+    """
+    cmd = [
+        RGW_ADMIN, '--id={}'.format(_key_name()),
+        'sync', 'group', 'flow', 'create',
+        '--group-id={}'.format(group_id),
+        '--flow-id={}'.format(flow_id),
+        '--flow-type={}'.format(flow_type),
+    ]
+    if flow_type == SYNC_FLOW_SYMMETRICAL:
+        cmd.append('--zones={},{}'.format(source_zone, dest_zone))
+    elif flow_type == SYNC_FLOW_DIRECTIONAL:
+        cmd.append('--source-zone={}'.format(source_zone))
+        cmd.append('--dest-zone={}'.format(dest_zone))
+    else:
+        raise UnknownSyncFlowType(
+            'Unknown sync flow type {}'.format(flow_type))
+    try:
+        return json.loads(_check_output(cmd))
+    except TypeError:
+        return None
+
+
+def remove_sync_group_flow(group_id, flow_id, flow_type, source_zone=None,
+                           dest_zone=None):
+    """Remove a sync group data flow.
+
+    :param group_id: The ID of the sync group.
+    :type group_id: str
+    :param flow_id: The ID of the flow to remove.
+    :type flow_id: str
+    :param flow_type: The type of the flow to remove.
+    :type flow_type: str
+    :param source_zone: The source zone of the flow to remove (only for
+        directional flows).
+    :type source_zone: str
+    :param dest_zone: The destination zone of the flow to remove (only for
+        directional flows).
+    :type dest_zone: str
+
+    :return: The output of the command as a dict.
+    :rtype: dict
+    """
+    cmd = [
+        RGW_ADMIN, '--id={}'.format(_key_name()),
+        'sync', 'group', 'flow', 'remove',
+        '--group-id={}'.format(group_id),
+        '--flow-id={}'.format(flow_id),
+        '--flow-type={}'.format(flow_type),
+    ]
+    if flow_type == SYNC_FLOW_DIRECTIONAL:
+        cmd.append('--source-zone={}'.format(source_zone))
+        cmd.append('--dest-zone={}'.format(dest_zone))
+    try:
+        return json.loads(_check_output(cmd))
+    except TypeError:
+        return None
+
+
+def create_sync_group_pipe(group_id, pipe_id, source_zones, dest_zones,
+                           source_bucket='*', dest_bucket='*', bucket=None):
+    """Create a sync group pipe between source and destination zones.
+
+    :param group_id: The ID of the sync group.
+    :type group_id: str
+    :param pipe_id: The ID of the sync group pipe.
+    :type pipe_id: str
+    :param source_zones: A list of source zones.
+    :type source_zones: list
+    :param dest_zones: A list of destination zones.
+    :type dest_zones: list
+    :param source_bucket: The source bucket name. Default is '*'.
+    :type source_bucket: str
+    :param dest_bucket: The destination bucket name. Default is '*'.
+    :type dest_bucket: str
+    :param bucket: The bucket name. If specified, the sync group pipe will be
+        created for this bucket only.
+    :type bucket: str
+
+    :return: Sync group pipe configuration.
+    :rtype: dict
+    """
+    cmd = [
+        RGW_ADMIN, '--id={}'.format(_key_name()),
+        'sync', 'group', 'pipe', 'create',
+        '--group-id={}'.format(group_id),
+        '--pipe-id={}'.format(pipe_id),
+        '--source-zones={}'.format(','.join(source_zones)),
+        '--source-bucket={}'.format(source_bucket),
+        '--dest-zones={}'.format(','.join(dest_zones)),
+        '--dest-bucket={}'.format(dest_bucket),
+    ]
+    if bucket:
+        cmd.append('--bucket={}'.format(bucket))
+    try:
+        return json.loads(_check_output(cmd))
+    except TypeError:
+        return None

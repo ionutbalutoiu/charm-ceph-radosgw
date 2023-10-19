@@ -484,3 +484,173 @@ class TestMultisiteHelpers(CharmTestCase):
             multisite.check_cluster_has_buckets(),
             True
         )
+
+    def test_sync_group_exists(self):
+        groups = [
+            {'key': 'group1'},
+            {'key': 'group2'},
+        ]
+        self.subprocess.check_output.return_value = json.dumps(groups).encode()
+        self.assertTrue(multisite.sync_group_exists('group1'))
+        self.subprocess.check_output.assert_called_with([
+            'radosgw-admin', '--id=rgw.testhost',
+            'sync', 'group', 'get',
+        ])
+
+    def test_bucket_sync_group_exists(self):
+        with open(self._testdata('test_list_sync_groups'), 'rb') as f:
+            self.subprocess.check_output.return_value = f.read()
+            self.assertTrue(multisite.sync_group_exists('default',
+                                                        bucket='test'))
+            self.subprocess.check_output.assert_called_with([
+                'radosgw-admin', '--id=rgw.testhost',
+                'sync', 'group', 'get',
+                '--bucket=test',
+            ])
+
+    def test_sync_group_does_not_exists(self):
+        with open(self._testdata('test_list_sync_groups'), 'rb') as f:
+            self.subprocess.check_output.return_value = f.read()
+            self.assertFalse(multisite.sync_group_exists('group-non-existent'))
+            self.subprocess.check_output.assert_called_with([
+                'radosgw-admin', '--id=rgw.testhost',
+                'sync', 'group', 'get',
+            ])
+
+    def test_get_sync_group(self):
+        with open(self._testdata(whoami()), 'rb') as f:
+            self.subprocess.check_output.return_value = f.read()
+            result = multisite.get_sync_group('default')
+            self.assertEqual(result['id'], 'default')
+            self.subprocess.check_output.assert_called_with([
+                'radosgw-admin', '--id=rgw.testhost',
+                'sync', 'group', 'get',
+                '--group-id=default',
+            ])
+
+    def test_create_sync_group(self):
+        test_group_json = json.dumps({"id": "default"}).encode()
+        self.subprocess.check_output.return_value = test_group_json
+        result = multisite.create_sync_group(
+            group_id='default',
+            status=multisite.SYNC_POLICY_ENABLED,
+        )
+        self.assertEqual(result['id'], 'default')
+        self.subprocess.check_output.assert_called_with([
+            'radosgw-admin', '--id=rgw.testhost',
+            'sync', 'group', 'create',
+            '--group-id=default',
+            '--status={}'.format(multisite.SYNC_POLICY_ENABLED),
+        ])
+
+    def test_create_sync_group_wrong_status(self):
+        self.assertRaises(
+            multisite.UnknownSyncPolicyState,
+            multisite.create_sync_group, "default", "wrong_status",
+        )
+
+    def test_remove_sync_group(self):
+        multisite.remove_sync_group('default')
+        self.subprocess.check_output.assert_called_with([
+            'radosgw-admin', '--id=rgw.testhost',
+            'sync', 'group', 'remove',
+            '--group-id=default',
+        ])
+
+    def test_create_sync_group_flow_symmetrical(self):
+        with open(self._testdata('test_create_sync_group_flow'), 'rb') as f:
+            self.subprocess.check_output.return_value = f.read()
+            result = multisite.create_sync_group_flow(
+                group_id='default',
+                flow_id='flow_id',
+                flow_type=multisite.SYNC_FLOW_SYMMETRICAL,
+                source_zone='zone_a',
+                dest_zone='zone_b',
+            )
+            self.assertEqual(result['groups'][0]['id'], 'default')
+            self.subprocess.check_output.assert_called_with([
+                'radosgw-admin', '--id=rgw.testhost',
+                'sync', 'group', 'flow', 'create',
+                '--group-id=default',
+                '--flow-id=flow_id',
+                '--flow-type=symmetrical',
+                '--zones=zone_a,zone_b',
+            ])
+
+    def test_create_sync_group_flow_directional(self):
+        with open(self._testdata('test_create_sync_group_flow'), 'rb') as f:
+            self.subprocess.check_output.return_value = f.read()
+            result = multisite.create_sync_group_flow(
+                group_id='default',
+                flow_id='flow_id',
+                flow_type=multisite.SYNC_FLOW_DIRECTIONAL,
+                source_zone='zone_a',
+                dest_zone='zone_b',
+            )
+            self.assertEqual(result['groups'][0]['id'], 'default')
+            self.subprocess.check_output.assert_called_with([
+                'radosgw-admin', '--id=rgw.testhost',
+                'sync', 'group', 'flow', 'create',
+                '--group-id=default',
+                '--flow-id=flow_id',
+                '--flow-type=directional',
+                '--source-zone=zone_a', '--dest-zone=zone_b',
+            ])
+
+    def test_create_sync_group_flow_wrong_type(self):
+        self.assertRaises(
+            multisite.UnknownSyncFlowType,
+            multisite.create_sync_group_flow,
+            group_id='default', flow_id='flow_id', flow_type='wrong_type',
+            source_zone='zone_a', dest_zone='zone_b',
+        )
+
+    def test_remove_sync_group_flow_symmetrical(self):
+        multisite.remove_sync_group_flow(
+            group_id='default',
+            flow_id='flow_id',
+            flow_type=multisite.SYNC_FLOW_SYMMETRICAL,
+        )
+        self.subprocess.check_output.assert_called_with([
+            'radosgw-admin', '--id=rgw.testhost',
+            'sync', 'group', 'flow', 'remove',
+            '--group-id=default',
+            '--flow-id=flow_id',
+            '--flow-type=symmetrical',
+        ])
+
+    def test_remove_sync_group_flow_directional(self):
+        multisite.remove_sync_group_flow(
+            group_id='default',
+            flow_id='flow_id',
+            flow_type=multisite.SYNC_FLOW_DIRECTIONAL,
+            source_zone='zone_a',
+            dest_zone='zone_b',
+        )
+        self.subprocess.check_output.assert_called_with([
+            'radosgw-admin', '--id=rgw.testhost',
+            'sync', 'group', 'flow', 'remove',
+            '--group-id=default',
+            '--flow-id=flow_id',
+            '--flow-type=directional',
+            '--source-zone=zone_a', '--dest-zone=zone_b',
+        ])
+
+    def test_create_sync_group_pipe(self):
+        with open(self._testdata(whoami()), 'rb') as f:
+            self.subprocess.check_output.return_value = f.read()
+            result = multisite.create_sync_group_pipe(
+                group_id='default',
+                pipe_id='pipe_id',
+                source_zones=['zone_a', 'zone_b'],
+                dest_zones=['zone_c', 'zone_d'],
+            )
+            self.assertEqual(result['groups'][0]['id'], 'default')
+            self.subprocess.check_output.assert_called_with([
+                'radosgw-admin', '--id=rgw.testhost',
+                'sync', 'group', 'pipe', 'create',
+                '--group-id=default',
+                '--pipe-id=pipe_id',
+                '--source-zones=zone_a,zone_b', '--source-bucket=*',
+                '--dest-zones=zone_c,zone_d', '--dest-bucket=*',
+            ])

@@ -30,6 +30,7 @@ from charmhelpers.core.hookenv import (
     leader_set,
     action_set,
     action_get,
+    relation_ids,
     log,
     ERROR,
     DEBUG,
@@ -48,6 +49,8 @@ from utils import (
 from charmhelpers.core.host import (
     service_restart,
 )
+
+DEFAULT_SYNC_POLICY_ID = 'default'
 
 
 def pause(args):
@@ -227,6 +230,128 @@ def force_enable_multisite(args):
         action_fail(message + " : {}".format(cpe.output))
 
 
+def is_multisite_sync_policy_action_allowed():
+    if not is_leader():
+        action_fail("This action can only be executed on leader unit.")
+        return False
+
+    realm = config('realm')
+    zone = config('zone')
+    zonegroup = config('zonegroup')
+
+    if not all((realm, zonegroup, zone)):
+        action_fail("Missing required charm configurations realm({}), "
+                    "zonegroup({}) and zone({}).".format(
+                        realm, zonegroup, zone
+                    ))
+        return False
+
+    if not multisite.is_multisite_configured(zone=zone, zonegroup=zonegroup):
+        action_fail("Multisite is not configured")
+        return False
+
+    primary_rids = relation_ids('primary') + relation_ids('master')
+    if not primary_rids:
+        action_fail('This action can only be executed on primary RGW '
+                    'application units.')
+        return False
+
+    return True
+
+
+def update_buckets_sync_policy(buckets, sync_policy_state):
+    zone = config('zone')
+    zonegroup = config('zonegroup')
+    existing_buckets = multisite.list_buckets(zonegroup=zonegroup, zone=zone)
+    messages = []
+    for bucket in buckets:
+        if bucket in existing_buckets:
+            multisite.create_sync_group(
+                bucket=bucket,
+                group_id=DEFAULT_SYNC_POLICY_ID,
+                status=sync_policy_state)
+            multisite.create_sync_group_pipe(
+                bucket=bucket,
+                group_id=DEFAULT_SYNC_POLICY_ID,
+                pipe_id=DEFAULT_SYNC_POLICY_ID,
+                source_zones=['*'],
+                dest_zones=['*'])
+            message = 'Updated "{}" bucket sync policy to "{}"'.format(
+                bucket, sync_policy_state)
+        else:
+            message = ('Bucket "{}" does not exist in the zonegroup "{}" and '
+                       'zone "{}"'.format(bucket, zonegroup, zone))
+        log(message)
+        messages.append(message)
+    action_set(
+        values={
+            'message': '\n'.join(messages)
+        }
+    )
+
+
+def reset_buckets_sync_policy(buckets):
+    zone = config('zone')
+    zonegroup = config('zonegroup')
+    existing_buckets = multisite.list_buckets(zonegroup=zonegroup, zone=zone)
+    messages = []
+    for bucket in buckets:
+        if bucket in existing_buckets:
+            multisite.remove_sync_group(
+                bucket=bucket,
+                group_id=DEFAULT_SYNC_POLICY_ID)
+            message = 'Reset "{}" bucket sync policy'.format(bucket)
+        else:
+            message = ('Bucket "{}" does not exist in the zonegroup "{}" and '
+                       'zone "{}"'.format(bucket, zonegroup, zone))
+        log(message)
+        messages.append(message)
+    action_set(
+        values={
+            'message': '\n'.join(messages)
+        }
+    )
+
+
+def enable_buckets_sync(args):
+    if not is_multisite_sync_policy_action_allowed():
+        return
+    try:
+        update_buckets_sync_policy(
+            buckets=action_get('buckets').split(','),
+            sync_policy_state=multisite.SYNC_POLICY_ENABLED,
+        )
+    except subprocess.CalledProcessError as cpe:
+        message = "Failed to enable sync for the given buckets"
+        log(message, level=ERROR)
+        action_fail(message + " : {}".format(cpe.output))
+
+
+def disable_buckets_sync(args):
+    if not is_multisite_sync_policy_action_allowed():
+        return
+    try:
+        update_buckets_sync_policy(
+            buckets=action_get('buckets').split(','),
+            sync_policy_state=multisite.SYNC_POLICY_FORBIDDEN,
+        )
+    except subprocess.CalledProcessError as cpe:
+        message = "Failed to disable sync for the given buckets"
+        log(message, level=ERROR)
+        action_fail(message + " : {}".format(cpe.output))
+
+
+def reset_buckets_sync(args):
+    if not is_multisite_sync_policy_action_allowed():
+        return
+    try:
+        reset_buckets_sync_policy(buckets=action_get('buckets').split(','))
+    except subprocess.CalledProcessError as cpe:
+        message = "Failed to reset sync for the given buckets"
+        log(message, level=ERROR)
+        action_fail(message + " : {}".format(cpe.output))
+
+
 # A dictionary of all the defined actions to callables (which take
 # parsed arguments).
 ACTIONS = {
@@ -237,6 +362,9 @@ ACTIONS = {
     "readwrite": readwrite,
     "tidydefaults": tidydefaults,
     "force-enable-multisite": force_enable_multisite,
+    "enable-buckets-sync": enable_buckets_sync,
+    "disable-buckets-sync": disable_buckets_sync,
+    "reset-buckets-sync": reset_buckets_sync,
 }
 
 

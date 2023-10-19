@@ -43,6 +43,7 @@ from charmhelpers.core.hookenv import (
     relation_set,
     log,
     DEBUG,
+    WARNING,
     Hooks, UnregisteredHookError,
     status_set,
     is_leader,
@@ -134,6 +135,7 @@ APACHE_PACKAGES = [
 ]
 
 MULTISITE_SYSTEM_USER = 'multisite-sync'
+MULTISITE_DEFAULT_SYNC_GROUP_ID = 'default'
 
 
 def upgrade_available():
@@ -835,6 +837,123 @@ def primary_relation_joined(relation_id=None):
                  secret=secret)
 
 
+@hooks.hook('primary-relation-changed')
+def primary_relation_changed(relation_id=None, unit=None):
+    if not is_leader():
+        log('Cannot setup multisite configuration, this unit is not the '
+            'leader')
+        return
+    if not ready_for_service(legacy=False):
+        log('unit not ready, deferring multisite configuration')
+        return
+
+    sync_policy_state = config('sync-policy-state')
+    if not sync_policy_state:
+        log("The config sync-policy-state is not set. Skipping zone group "
+            "default sync policy configuration")
+        return
+
+    secondary_data = relation_get(rid=relation_id, unit=unit)
+    if not all((secondary_data.get('zone'),
+                secondary_data.get('sync_policy_flow_type'))):
+        log("Defer processing until secondary RGW has provided required data")
+        return
+
+    zonegroup = config('zonegroup')
+    primary_zone = config('zone')
+    secondary_zone = secondary_data['zone']
+    sync_flow_type = secondary_data['sync_policy_flow_type']
+
+    if (secondary_data.get('zone_tier_type') == 'cloud' and
+            sync_flow_type != multisite.SYNC_FLOW_DIRECTIONAL):
+        log("The secondary zone is set with cloud tier type. Ignoring "
+            "configured {} sync policy flow, and using {}.".format(
+                sync_flow_type,
+                multisite.SYNC_FLOW_DIRECTIONAL),
+            level=WARNING)
+        sync_flow_type = multisite.SYNC_FLOW_DIRECTIONAL
+
+    mutation = False
+    flow_id = '{}-{}'.format(primary_zone, secondary_zone)
+    pipe_id = '{}-{}'.format(primary_zone, secondary_zone)
+
+    if multisite.sync_group_exists(MULTISITE_DEFAULT_SYNC_GROUP_ID):
+        # check if sync group changed
+        group = multisite.get_sync_group(MULTISITE_DEFAULT_SYNC_GROUP_ID)
+        if group.get('status') != sync_policy_state:
+            log('Default sync policy state changed to {}'.format(
+                sync_policy_state))
+            mutation = True
+        # check if data flow needs to be created or updated
+        symmetrical_flows = [
+            flow['id']
+            for flow in group['data_flow'].get('symmetrical', [])
+        ]
+        directional_flows = [
+            "{}-{}".format(flow['source_zone'], flow['dest_zone'])
+            for flow in group['data_flow'].get('directional', [])
+        ]
+        data_flows = symmetrical_flows + directional_flows
+        if flow_id not in data_flows:
+            log('Data flow {} not found, creating now'.format(flow_id))
+        else:
+            if (sync_flow_type == multisite.SYNC_FLOW_SYMMETRICAL and
+                    flow_id in directional_flows):
+                multisite.remove_sync_group_flow(
+                    group_id=MULTISITE_DEFAULT_SYNC_GROUP_ID, flow_id=flow_id,
+                    flow_type=multisite.SYNC_FLOW_DIRECTIONAL,
+                    source_zone=primary_zone, dest_zone=secondary_zone)
+                mutation = True
+            if (sync_flow_type == multisite.SYNC_FLOW_DIRECTIONAL and
+                    flow_id in symmetrical_flows):
+                multisite.remove_sync_group_flow(
+                    group_id=MULTISITE_DEFAULT_SYNC_GROUP_ID, flow_id=flow_id,
+                    flow_type=multisite.SYNC_FLOW_SYMMETRICAL,
+                    source_zone=primary_zone, dest_zone=secondary_zone)
+                mutation = True
+            if mutation:
+                log('Data flow {} type changed to {}'.format(flow_id,
+                                                             sync_flow_type))
+        # check if pipe needs to be created
+        pipes = [pipe['id'] for pipe in group['pipes']]
+        if pipe_id not in pipes:
+            log('Pipe {} not found, creating now'.format(pipe_id))
+            mutation = True
+    else:
+        log('Default sync policy not configured, configuring it now')
+        mutation = True
+
+    if mutation:
+        multisite.create_sync_group(
+            group_id=MULTISITE_DEFAULT_SYNC_GROUP_ID,
+            status=sync_policy_state)
+        multisite.create_sync_group_flow(
+            group_id=MULTISITE_DEFAULT_SYNC_GROUP_ID,
+            flow_id=flow_id,
+            flow_type=sync_flow_type,
+            source_zone=primary_zone,
+            dest_zone=secondary_zone)
+        source_zones = [primary_zone, secondary_zone]
+        dest_zones = [primary_zone, secondary_zone]
+        if sync_flow_type == multisite.SYNC_FLOW_DIRECTIONAL:
+            source_zones = [primary_zone]
+            dest_zones = [secondary_zone]
+        multisite.create_sync_group_pipe(
+            group_id=MULTISITE_DEFAULT_SYNC_GROUP_ID,
+            pipe_id=pipe_id,
+            source_zones=source_zones,
+            dest_zones=dest_zones)
+        log(
+            'Mutation detected. Restarting {}.'.format(service_name()),
+            'INFO')
+        multisite.update_period(zonegroup=zonegroup, zone=primary_zone)
+        CONFIGS.write_all()
+        service_restart(service_name())
+        leader_set(restart_nonce=str(uuid.uuid4()))
+    else:
+        log('No mutation detected.', 'INFO')
+
+
 @hooks.hook('primary-relation-departed')
 @hooks.hook('secondary-relation-departed')
 def multisite_relation_departed():
@@ -969,6 +1088,10 @@ def secondary_relation_changed(relation_id=None, unit=None):
     else:
         log('No mutation detected.', 'INFO')
 
+    relation_set(relation_id=relation_id,
+                 zone=zone,
+                 sync_policy_flow_type=config('sync-policy-flow-type'))
+
 
 @hooks.hook('master-relation-departed')
 @hooks.hook('slave-relation-departed')
@@ -1006,6 +1129,8 @@ def leader_settings_changed():
         # Primary/Secondary relation
         for r_id in relation_ids('primary'):
             primary_relation_joined(r_id)
+            for unit in related_units(r_id):
+                primary_relation_changed(r_id, unit)
         for r_id in relation_ids('radosgw-user'):
             radosgw_user_changed(r_id)
 
@@ -1021,6 +1146,8 @@ def process_multisite_relations():
     # Primary/Secondary relation
     for r_id in relation_ids('primary'):
         primary_relation_joined(r_id)
+        for unit in related_units(r_id):
+            primary_relation_changed(r_id, unit)
     for r_id in relation_ids('secondary'):
         for unit in related_units(r_id):
             secondary_relation_changed(r_id, unit)
