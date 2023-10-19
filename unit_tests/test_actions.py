@@ -82,6 +82,7 @@ class MultisiteActionsTestCase(CharmTestCase):
 
     TO_PATCH = [
         'action_fail',
+        'action_get',
         'action_set',
         'multisite',
         'config',
@@ -154,3 +155,85 @@ class MultisiteActionsTestCase(CharmTestCase):
         self.test_config.set('zone', None)
         actions.tidydefaults([])
         self.action_fail.assert_called_once()
+
+    def test_enable_buckets_sync(self):
+        self.is_leader.return_value = True
+        self.action_get.return_value = 'testbucket1,testbucket2,non-existent'
+        self.test_config.set('zone', 'testzone')
+        self.test_config.set('zonegroup', 'testzonegroup')
+        self.multisite.list_buckets.return_value = ['testbucket1',
+                                                    'testbucket2']
+        actions.enable_buckets_sync([])
+        self.action_get.assert_called_once_with('buckets')
+        self.assertEqual(self.multisite.list_buckets.call_count, 3)
+        self.multisite.list_buckets.assert_has_calls([
+            mock.call(zonegroup='testzonegroup', zone='testzone'),
+            mock.call(zonegroup='testzonegroup', zone='testzone'),
+            mock.call(zonegroup='testzonegroup', zone='testzone'),
+        ])
+        self.assertEqual(self.multisite.create_sync_group.call_count, 2)
+        self.multisite.create_sync_group.assert_has_calls([
+            mock.call(bucket='testbucket1',
+                      group_id='default',
+                      status=self.multisite.SYNC_POLICY_ENABLED),
+            mock.call(bucket='testbucket2',
+                      group_id='default',
+                      status=self.multisite.SYNC_POLICY_ENABLED),
+        ])
+        self.assertEqual(self.multisite.create_sync_group_pipe.call_count, 2)
+        self.multisite.create_sync_group_pipe.assert_has_calls([
+            mock.call(bucket='testbucket1',
+                      group_id='default',
+                      pipe_id='default',
+                      source_zones=['*'],
+                      dest_zones=['*']),
+            mock.call(bucket='testbucket2',
+                      group_id='default',
+                      pipe_id='default',
+                      source_zones=['*'],
+                      dest_zones=['*']),
+        ])
+
+    def test_disable_buckets_sync(self):
+        self.is_leader.return_value = True
+        self.action_get.return_value = 'testbucket1,non-existent'
+        self.test_config.set('zone', 'testzone')
+        self.test_config.set('zonegroup', 'testzonegroup')
+        self.multisite.list_buckets.return_value = ['testbucket1']
+        actions.disable_buckets_sync([])
+        self.action_get.assert_called_once_with('buckets')
+        self.assertEqual(self.multisite.list_buckets.call_count, 2)
+        self.multisite.list_buckets.assert_has_calls([
+            mock.call(zonegroup='testzonegroup', zone='testzone'),
+            mock.call(zonegroup='testzonegroup', zone='testzone'),
+        ])
+        self.multisite.create_sync_group.assert_called_once_with(
+            bucket='testbucket1',
+            group_id='default',
+            status=self.multisite.SYNC_POLICY_FORBIDDEN,
+        )
+        self.multisite.create_sync_group_pipe.assert_called_once_with(
+            bucket='testbucket1',
+            group_id='default',
+            pipe_id='default',
+            source_zones=['*'],
+            dest_zones=['*'],
+        )
+
+    def test_reset_buckets_sync(self):
+        self.is_leader.return_value = True
+        self.action_get.return_value = 'testbucket1,non-existent'
+        self.test_config.set('zone', 'testzone')
+        self.test_config.set('zonegroup', 'testzonegroup')
+        self.multisite.list_buckets.return_value = ['testbucket1']
+        actions.reset_buckets_sync([])
+        self.action_get.assert_called_once_with('buckets')
+        self.assertEqual(self.multisite.list_buckets.call_count, 2)
+        self.multisite.list_buckets.assert_has_calls([
+            mock.call(zonegroup='testzonegroup', zone='testzone'),
+            mock.call(zonegroup='testzonegroup', zone='testzone'),
+        ])
+        self.multisite.remove_sync_group.assert_called_once_with(
+            bucket='testbucket1',
+            group_id='default',
+        )

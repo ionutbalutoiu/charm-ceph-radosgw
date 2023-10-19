@@ -49,6 +49,8 @@ from charmhelpers.core.host import (
     service_restart,
 )
 
+DEFAULT_SYNC_POLICY_ID = 'default'
+
 
 def pause(args):
     """Pause the Ceilometer services.
@@ -227,6 +229,66 @@ def force_enable_multisite(args):
         action_fail(message + " : {}".format(cpe.output))
 
 
+def can_update_bucket_sync_policy(bucket):
+    zone = config('zone')
+    zonegroup = config('zonegroup')
+    existing_buckets = multisite.list_buckets(zonegroup=zonegroup, zone=zone)
+    if bucket not in existing_buckets:
+        print('Bucket "{}" does not exist in the zonegroup '
+              '"{}" and zone "{}".'.format(bucket, zonegroup, zone))
+        return False
+    return True
+
+
+def update_bucket_sync_policy(bucket, sync_policy_state):
+    if not can_update_bucket_sync_policy(bucket):
+        return
+    print('Updating "{}" bucket sync policy to "{}".'.format(
+        bucket, sync_policy_state))
+    multisite.create_sync_group(
+        bucket=bucket,
+        group_id=DEFAULT_SYNC_POLICY_ID,
+        status=sync_policy_state)
+    multisite.create_sync_group_pipe(
+        bucket=bucket,
+        group_id=DEFAULT_SYNC_POLICY_ID,
+        pipe_id=DEFAULT_SYNC_POLICY_ID,
+        source_zones=['*'],
+        dest_zones=['*'])
+
+
+def enable_buckets_sync(args):
+    if not is_leader():
+        action_fail('This action can only be executed on leader unit.')
+        return False
+    buckets = action_get('buckets').split(',')
+    for bucket in buckets:
+        update_bucket_sync_policy(bucket, multisite.SYNC_POLICY_ENABLED)
+
+
+def disable_buckets_sync(args):
+    if not is_leader():
+        action_fail('This action can only be executed on leader unit.')
+        return False
+    buckets = action_get('buckets').split(',')
+    for bucket in buckets:
+        update_bucket_sync_policy(bucket, multisite.SYNC_POLICY_FORBIDDEN)
+
+
+def reset_buckets_sync(args):
+    if not is_leader():
+        action_fail('This action can only be executed on leader unit.')
+        return False
+    buckets = action_get('buckets').split(',')
+    for bucket in buckets:
+        if not can_update_bucket_sync_policy(bucket):
+            continue
+        print('Resetting "{}" bucket sync policy.'.format(bucket))
+        multisite.remove_sync_group(
+            bucket=bucket,
+            group_id=DEFAULT_SYNC_POLICY_ID)
+
+
 # A dictionary of all the defined actions to callables (which take
 # parsed arguments).
 ACTIONS = {
@@ -237,6 +299,9 @@ ACTIONS = {
     "readwrite": readwrite,
     "tidydefaults": tidydefaults,
     "force-enable-multisite": force_enable_multisite,
+    "enable-buckets-sync": enable_buckets_sync,
+    "disable-buckets-sync": disable_buckets_sync,
+    "reset-buckets-sync": reset_buckets_sync,
 }
 
 
