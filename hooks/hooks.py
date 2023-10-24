@@ -95,6 +95,7 @@ from charmhelpers.contrib.openstack.ha.utils import (
 from utils import (
     assess_status,
     boto_client,
+    deep_equals,
     disable_unused_apache_sites,
     listen_port,
     multisite_deployment,
@@ -1069,10 +1070,14 @@ def cloud_sync_relation_changed(relation_id=None, unit=None):
         zonegroup_info.get('master_zone') == zone_info['id'] or
         zone_system_key.get('access_key') != primary_data['access_key'] or
         zone_system_key.get('secret_key') != primary_data['secret'] or
-        not extra_zone_info.get('read_only') or
-        not multisite.equal_tier_config(actual=current_tier_config,
-                                        expected=tier_config)
+        not extra_zone_info.get('read_only')
     )
+
+    zone_info = multisite.get_zone_info(zone, zonegroup=zonegroup)
+    if zone_info and 'tier_config' in zone_info:
+        current_tier_config = zone_info.get('tier_config', {})
+        if not deep_equals(current_tier_config, tier_config):
+            mutation = True
 
     if mutation:
         flatten_tier_config = multisite.flatten_zone_tier_config(tier_config)

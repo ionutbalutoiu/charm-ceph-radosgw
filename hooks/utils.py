@@ -258,10 +258,10 @@ def check_optional_config_and_relations(configs):
                                  "resolve."
                     if (len(zonegroups) > 1 and
                             config('zonegroup') not in zonegroups):
-                        return('blocked', status_msg)
+                        return ('blocked', status_msg)
 
                     if len(zones) > 1 and config('zone') not in zones:
-                        return('blocked', status_msg)
+                        return ('blocked', status_msg)
 
                     if not all(master_configured):
                         return ('blocked', "Failure in Multisite migration, "
@@ -563,3 +563,42 @@ def clear_s3_app(app):
     if app in apps:
         del apps[app]
         leader_set({"s3-apps": json.dumps(apps)})
+
+
+def deep_equals(actual, expected):
+    """Checks if two given values are equal.
+
+    This function detects if the compared values are lists or dicts and
+    compares them recursively. Order of items in lists or dicts is not
+    important.
+
+    This is used when comparing zone tier config, against the expected value
+    from charm configs and relation data. The zone tier config may contain
+    nested unordered lists and dicts.
+
+    :param actual: actual value for comparison.
+    :type actual: any
+    :param expected: expected value.
+    :type expected: any
+    :rtype: Boolean
+    """
+    if type(actual) is list and type(expected) is list:
+        if len(actual) != len(expected):
+            return False
+        for actual_item in actual:
+            found = False
+            for expected_item in expected:
+                if deep_equals(actual_item, expected_item):
+                    found = True
+                    break
+            if not found:
+                return False
+        return True
+    elif type(actual) is dict and type(expected) is dict:
+        if len(actual) != len(expected):
+            return False
+        for k in actual:
+            if not deep_equals(actual.get(k), expected.get(k)):
+                return False
+        return True
+    return actual == expected

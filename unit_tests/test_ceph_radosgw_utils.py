@@ -324,3 +324,78 @@ class CephRadosGWUtilTests(CharmTestCase):
         s3_info = utils.s3_app('myapp')
         self.assertEqual(s3_info, 'a')
         self.leader_get.assert_called_once_with('s3-apps')
+
+    def test_deep_equals(self):
+        actual = {
+            "connection_id": "<id>",
+            "target_path": "<target_path>",
+            "connections": [
+                {
+                    "id": "<id2>",
+                    "endpoint": "<endpoint2>",
+                },
+                {
+                    "id": "<id1>",
+                    "endpoint": "<endpoint1>",
+                },
+            ],
+            "profiles": [
+                {
+                    "connection_id": "<id>",
+                    "source_bucket": "<bucket>",
+                    "target_path": "<target_path>",
+                }
+            ],
+        }
+        expected = {
+            "connection_id": "<id>",
+            "profiles": [
+                {
+                    "connection_id": "<id>",
+                    "source_bucket": "<bucket>",
+                    "target_path": "<target_path>",
+                }
+            ],
+            "connections": [
+                {
+                    "id": "<id1>",
+                    "endpoint": "<endpoint1>",
+                },
+                {
+                    "id": "<id2>",
+                    "endpoint": "<endpoint2>",
+                },
+            ],
+            "target_path": "<target_path>",
+        }
+        self.assertTrue(utils.deep_equals(actual, expected))
+
+    def test_deep_equals_different_values(self):
+        actual = {
+            "connection_id": "<id>",
+            "target_path": "<target_path>",
+            "connections": [
+                {
+                    "id": "<id>",
+                    "endpoint": "<endpoint>",
+                },
+            ],
+        }
+        expected = {
+            "connection_id": "<id>",
+            "profiles": [
+                {
+                    "connection_id": "<id>",
+                    "source_bucket": "<bucket>",
+                    "target_path": "<target_path>",
+                }
+            ],
+            "connections": [
+                {
+                    "id": "<id>",
+                    "endpoint": "<endpoint>",
+                },
+            ],
+            "target_path": "<target_path>",
+        }
+        self.assertFalse(utils.deep_equals(actual, expected))

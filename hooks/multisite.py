@@ -982,69 +982,6 @@ def get_cloud_sync_tier_config(s3_rel_context, default_profile, target_path):
     return tier_config
 
 
-def equal_tier_config(actual, expected):
-    """Compares two tier configs and returns whether they are equal.
-
-    The expected tier config format is:
-    {
-        "connection_id": "<id>",
-        "target_path": "<target_path>",
-        "connections": [
-            {
-                "id": "<id>",
-                "access_key": <access>,
-                "secret": <secret>,
-                "region": "<region>",
-                "endpoint": "<endpoint>",
-                ...
-            }
-            ...
-        ],
-        profiles: [
-            {
-                "connection_id": "<id>",
-                "source_bucket": "<bucket>",
-                "target_path": "<target_path>",
-                ...
-            }
-            ...
-        ]
-    }
-
-    The tier config can get more complex than this, but the above format is
-    what the charm is currently using. We only care to check if the charm
-    configs updated the previously applied tier config. Order of the items in
-    the nested lists and dicts is not important.
-
-    :param actual: tier config for comparison.
-    :type actual: dict
-    :param expected: expected tier config (usually the value returned by
-        'get_cloud_sync_tier_config' function).
-    :type expected: dict
-    :rtype: Boolean
-    """
-    if type(actual) is list and type(expected) is list:
-        if len(actual) != len(expected):
-            return False
-        for actual_item in actual:
-            found = False
-            for expected_item in expected:
-                if equal_tier_config(actual_item, expected_item):
-                    found = True
-                    break
-            if not found:
-                return False
-        return True
-    elif type(actual) is dict and type(expected) is dict:
-        if len(actual) != len(expected):
-            return False
-        for k in actual:
-            if not equal_tier_config(actual.get(k), expected.get(k)):
-                return False
-        return True
-    return actual == expected
-
-
 def flatten_zone_tier_config(config, root_key_name=''):
     """Returns a flatten list of zone tier config.
     This function is used to convert a dict tier config to a flatten list of
