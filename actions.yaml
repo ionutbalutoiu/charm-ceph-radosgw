@@ -19,6 +19,14 @@ force-enable-multisite:
     zonegroup:
       type: string
       description: Existing Zonegroup to be reconfigured as the 'zonegroup' config value.
+get-sync-policy:
+  description: |
+    Returns the sync policy for a specific bucket. If no bucket is specified,
+    the default zone group sync policy is returned.
+  params:
+    bucket:
+      type: string
+      description: Bucket name.
 enable-buckets-sync:
   description: |
     Enable buckets sync in the multi-site replication. This is meant to be

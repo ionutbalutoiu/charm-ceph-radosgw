@@ -257,6 +257,16 @@ def update_bucket_sync_policy(bucket, sync_policy_state):
         dest_zones=['*'])
 
 
+def get_sync_policy(args):
+    if not is_leader():
+        action_fail('This action can only be executed on leader unit.')
+        action_set({'policy': None})
+        return False
+    sync_policy = multisite.get_sync_group(group_id=DEFAULT_SYNC_POLICY_ID,
+                                           bucket=action_get('bucket'))
+    action_set({'policy': sync_policy})
+
+
 def enable_buckets_sync(args):
     if not is_leader():
         action_fail('This action can only be executed on leader unit.')
@@ -299,6 +309,7 @@ ACTIONS = {
     "readwrite": readwrite,
     "tidydefaults": tidydefaults,
     "force-enable-multisite": force_enable_multisite,
+    "get-sync-policy": get_sync_policy,
     "enable-buckets-sync": enable_buckets_sync,
     "disable-buckets-sync": disable_buckets_sync,
     "reset-buckets-sync": reset_buckets_sync,

@@ -221,6 +221,7 @@ not deployed then see file `actions.yaml`.
 * `readwrite`
 * `resume`
 * `tidydefaults`
+* `get-sync-policy`
 * `enable-buckets-sync`
 * `disable-buckets-sync`
 * `reset-buckets-sync`
