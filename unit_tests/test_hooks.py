@@ -904,7 +904,11 @@ class PrimaryMultisiteTests(CephRadosMultisiteTests):
 
         self.is_leader.assert_called_once()
         self.ready_for_service.assert_called_once_with(legacy=False)
-        self.config.assert_called_once_with('sync-policy-state')
+        self.config.assert_has_calls([
+            call('zonegroup'),
+            call('zone'),
+            call('sync-policy-state'),
+        ])
 
     def test_primary_relation_changed_sync_rel_data_incomplete(self):
         self.is_leader.return_value = True
@@ -915,7 +919,11 @@ class PrimaryMultisiteTests(CephRadosMultisiteTests):
 
         self.is_leader.assert_called_once()
         self.ready_for_service.assert_called_once_with(legacy=False)
-        self.config.assert_called_once_with('sync-policy-state')
+        self.config.assert_has_calls([
+            call('zonegroup'),
+            call('zone'),
+            call('sync-policy-state'),
+        ])
         self.relation_get.assert_called_once_with(rid='primary:1',
                                                   unit='rgw/0')
 
@@ -946,9 +954,9 @@ class PrimaryMultisiteTests(CephRadosMultisiteTests):
         self.is_leader.assert_called_once()
         self.ready_for_service.assert_called_once_with(legacy=False)
         self.config.assert_has_calls([
-            call('sync-policy-state'),
             call('zonegroup'),
             call('zone'),
+            call('sync-policy-state'),
         ])
         self.relation_get.assert_called_once_with(rid='primary:1',
                                                   unit='rgw/0')

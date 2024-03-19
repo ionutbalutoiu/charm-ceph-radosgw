@@ -847,10 +847,19 @@ def primary_relation_changed(relation_id=None, unit=None):
         log('unit not ready, deferring multisite configuration')
         return
 
+    zonegroup = config('zonegroup')
+    primary_zone = config('zone')
+
     sync_policy_state = config('sync-policy-state')
     if not sync_policy_state:
-        log("The config sync-policy-state is not set. Skipping zone group "
-            "default sync policy configuration")
+        if multisite.sync_group_exists(MULTISITE_DEFAULT_SYNC_GROUP_ID):
+            log("The config sync-policy-state is not set, but the default "
+                "sync policy exists. Removing it")
+            multisite.remove_sync_group(MULTISITE_DEFAULT_SYNC_GROUP_ID)
+            multisite.update_period(zonegroup=zonegroup, zone=primary_zone)
+        else:
+            log("The config sync-policy-state is not set. Skipping zone group "
+                "default sync policy configuration")
         return
 
     secondary_data = relation_get(rid=relation_id, unit=unit)
@@ -859,8 +868,6 @@ def primary_relation_changed(relation_id=None, unit=None):
         log("Defer processing until secondary RGW has provided required data")
         return
 
-    zonegroup = config('zonegroup')
-    primary_zone = config('zone')
     secondary_zone = secondary_data['zone']
     sync_flow_type = secondary_data['sync_policy_flow_type']
 
