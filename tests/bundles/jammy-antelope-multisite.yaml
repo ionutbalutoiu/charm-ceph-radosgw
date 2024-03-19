@@ -9,13 +9,19 @@ machines:
   '0':
   '1':
   '2':
+    constraints: "cores=2 mem=4G root-disk=50G virt-type=virtual-machine"
   '3':
+    constraints: "cores=2 mem=4G root-disk=50G virt-type=virtual-machine"
   '4':
   '5':
   '6':
+    constraints: "cores=2 mem=4G root-disk=50G virt-type=virtual-machine"
   '7':
+    constraints: "cores=2 mem=4G root-disk=50G virt-type=virtual-machine"
   '8':
+    constraints: "cores=2 mem=4G root-disk=50G virt-type=virtual-machine"
   '9':
+    constraints: "cores=2 mem=4G root-disk=50G virt-type=virtual-machine"
 
 applications:
   ceph-radosgw:
@@ -39,7 +45,7 @@ applications:
     num_units: 3
     constraints: "mem=2048"
     storage:
-      osd-devices: 'cinder,10G'
+      osd-devices: '10G'
     options:
       source: *source
       osd-devices: '/srv/ceph /dev/test-non-existent'
@@ -54,7 +60,7 @@ applications:
     num_units: 3
     constraints: "mem=2048"
     storage:
-      osd-devices: 'cinder,10G'
+      osd-devices: '10G'
     options:
       source: *source
       osd-devices: '/srv/ceph /dev/test-non-existent'

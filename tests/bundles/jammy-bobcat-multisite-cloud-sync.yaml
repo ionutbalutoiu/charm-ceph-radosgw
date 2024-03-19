@@ -10,11 +10,17 @@ machines:
   '1':
   '2':
   '3':
+    constraints: "cores=2 mem=4G root-disk=50G virt-type=virtual-machine"
   '4':
+    constraints: "cores=2 mem=4G root-disk=50G virt-type=virtual-machine"
   '5':
+    constraints: "cores=2 mem=4G root-disk=50G virt-type=virtual-machine"
   '6':
+    constraints: "cores=2 mem=4G root-disk=50G virt-type=virtual-machine"
   '7':
+    constraints: "cores=2 mem=4G root-disk=50G virt-type=virtual-machine"
   '8':
+    constraints: "cores=2 mem=4G root-disk=50G virt-type=virtual-machine"
   '9':
   '10':
   '11':
@@ -54,7 +60,7 @@ applications:
     charm: ch:ceph-osd
     num_units: 3
     storage:
-      osd-devices: 'cinder,10G'
+      osd-devices: '10G'
     options:
       source: *source
       osd-devices: '/srv/ceph /dev/test-non-existent'
@@ -68,7 +74,7 @@ applications:
     charm: ch:ceph-osd
     num_units: 3
     storage:
-      osd-devices: 'cinder,10G'
+      osd-devices: '10G'
     options:
       source: *source
       osd-devices: '/srv/ceph /dev/test-non-existent'
